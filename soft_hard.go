@@ -64,6 +64,7 @@ func SoftHard(ctx context.Context, produce ProduceFunc, soft, hard periods.Perio
 		result:    &atomic.Value{},
 		lock:      mutex,
 		condition: sync.NewCond(mutex),
+		state:     new(uint32),
 	}, nil
 }
 
@@ -82,7 +83,7 @@ type softHard struct {
 
 	lock      *sync.Mutex
 	condition *sync.Cond
-	state     uint32
+	state     *uint32
 }
 
 func (r *softHard) updateAsync() {
@@ -92,7 +93,7 @@ func (r *softHard) updateAsync() {
 		r.lock.Lock()
 		defer r.lock.Unlock()
 
-		atomic.StoreUint32(&r.state, 0)
+		atomic.StoreUint32(r.state, 0)
 		r.condition.Broadcast()
 	}()
 }
@@ -106,12 +107,12 @@ func (r *softHard) Get() (interface{}, error) {
 		}
 
 		if res.isValidAt(now, r.hard) {
-			if atomic.CompareAndSwapUint32(&r.state, 0, 1) {
+			if atomic.CompareAndSwapUint32(r.state, 0, 1) {
 				if res = r.result.Load().(result); res.isValidAt(now, r.soft) {
 					r.lock.Lock()
 					defer r.lock.Unlock()
 
-					atomic.StoreUint32(&r.state, 0)
+					atomic.StoreUint32(r.state, 0)
 					r.condition.Broadcast()
 				} else {
 					r.updateAsync()
@@ -129,8 +130,8 @@ func (r *softHard) Get() (interface{}, error) {
 		return res.expand()
 	}
 
-	for !atomic.CompareAndSwapUint32(&r.state, 0, 1) {
-		for atomic.LoadUint32(&r.state) > 0 {
+	for !atomic.CompareAndSwapUint32(r.state, 0, 1) {
+		for atomic.LoadUint32(r.state) > 0 {
 			r.condition.Wait()
 		}
 	}
@@ -139,7 +140,7 @@ func (r *softHard) Get() (interface{}, error) {
 		now := time.Now()
 
 		if res.isValidAt(now, r.soft) {
-			atomic.StoreUint32(&r.state, 0)
+			atomic.StoreUint32(r.state, 0)
 			r.condition.Broadcast()
 			return res.expand()
 		}
@@ -153,7 +154,7 @@ func (r *softHard) Get() (interface{}, error) {
 	res := produceResult(r.ctx, r.produce)
 	r.result.Store(res)
 
-	atomic.StoreUint32(&r.state, 0)
+	atomic.StoreUint32(r.state, 0)
 	r.condition.Broadcast()
 
 	return res.expand()
